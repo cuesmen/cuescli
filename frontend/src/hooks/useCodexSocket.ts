@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { ChatMessage, ConnectionState, MessageRole } from '../types';
-
-type AccessMode = 'default' | 'full-access';
+import type { AccessMode, ChatMessage, ConnectionState, MessageRole, StoredConversation, TurnDiff } from '../types';
 
 type PersistedSettings = {
   cwd: string;
   recentPaths: string[];
   accessMode: AccessMode;
   multiAgentEnabled: boolean;
+  autoOpenChanges: boolean;
+};
+
+type ConnectionOverrides = {
+  cwd?: string;
+  accessMode?: AccessMode;
+  multiAgentEnabled?: boolean;
+  conversationId?: string;
 };
 
 type State = {
@@ -17,15 +23,24 @@ type State = {
   error: string | null;
   activeTurnId: string | null;
   isRunning: boolean;
+  turnDiffs: TurnDiff[];
+  queuedPrompts: Array<{ id: string; text: string; timestamp: number }>;
 };
 
 type Action =
   | { type: 'connection'; payload: ConnectionState }
   | { type: 'message'; payload: ChatMessage }
+  | { type: 'promptDispatched' }
   | { type: 'assistantDelta'; payload: { turnId: string; delta: string } }
   | { type: 'session'; payload: string }
   | { type: 'turnStarted'; payload: string }
   | { type: 'turnCompleted'; payload: { turnId: string; error?: { message?: string } | null } }
+  | { type: 'turnDiff'; payload: TurnDiff }
+  | { type: 'removeTurnDiff'; payload: { turnId: string } }
+  | { type: 'removeTurnDiffFile'; payload: { turnId: string; path: string } }
+  | { type: 'enqueuePrompt'; payload: { id: string; text: string; timestamp: number } }
+  | { type: 'dequeuePrompt'; payload: { id: string } }
+  | { type: 'hydrateConversation'; payload: { messages: ChatMessage[]; turnDiffs: TurnDiff[] } }
   | { type: 'approvalResolved'; payload: { requestId: string | number; action: string } }
   | { type: 'clearSession' }
   | { type: 'error'; payload: string | null };
@@ -39,6 +54,8 @@ const initialState: State = {
   error: null,
   activeTurnId: null,
   isRunning: false,
+  turnDiffs: [],
+  queuedPrompts: [],
 };
 
 function createMessage(role: MessageRole, content: string, options = {}) {
@@ -57,6 +74,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, connectionState: action.payload };
     case 'message':
       return { ...state, messages: [...state.messages, action.payload] };
+    case 'promptDispatched':
+      return { ...state, isRunning: true };
     case 'assistantDelta': {
       const messages = [...state.messages];
       const lastMessage = messages[messages.length - 1];
@@ -85,6 +104,62 @@ function reducer(state: State, action: Action): State {
         messages: action.payload.error?.message
           ? [...state.messages, createMessage('error', action.payload.error.message, { turnId: action.payload.turnId })]
           : state.messages,
+      };
+    case 'turnDiff':
+      if (action.payload.available !== false && action.payload.files.length === 0) {
+        return state;
+      }
+      return {
+        ...state,
+        turnDiffs: [action.payload, ...state.turnDiffs.filter((item) => item.turnId !== action.payload.turnId)],
+      };
+    case 'removeTurnDiff':
+      return {
+        ...state,
+        turnDiffs: state.turnDiffs.filter((item) => item.turnId !== action.payload.turnId),
+      };
+    case 'removeTurnDiffFile':
+      return {
+        ...state,
+        turnDiffs: state.turnDiffs
+          .map((item) =>
+            item.turnId === action.payload.turnId
+              ? { ...item, files: item.files.filter((file) => file.path !== action.payload.path) }
+              : item
+          )
+          .filter((item) => item.files.length > 0 || item.available === false),
+      };
+    case 'enqueuePrompt':
+      {
+        const queuedMessage = createMessage('queued', action.payload.text, { queueId: action.payload.id });
+
+        return {
+          ...state,
+          queuedPrompts: [...state.queuedPrompts, action.payload],
+          messages: [...state.messages, queuedMessage],
+        };
+      }
+    case 'dequeuePrompt':
+      return {
+        ...state,
+        queuedPrompts: state.queuedPrompts.filter((item) => item.id !== action.payload.id),
+        messages: state.messages.map((message) =>
+          message.queueId === action.payload.id
+            ? { ...message, role: 'user', queueId: undefined }
+            : message
+        ),
+      };
+    case 'hydrateConversation':
+      return {
+        ...state,
+        connectionState: 'disconnected',
+        messages: action.payload.messages,
+        sessionId: null,
+        error: null,
+        activeTurnId: null,
+        isRunning: false,
+        turnDiffs: action.payload.turnDiffs,
+        queuedPrompts: [],
       };
     case 'approvalResolved':
       return {
@@ -123,6 +198,7 @@ function readPersistedSettings(): PersistedSettings {
     recentPaths: ['/home/cues/cuescli/backend'],
     accessMode: 'default',
     multiAgentEnabled: false,
+    autoOpenChanges: false,
   };
 
   if (typeof window === 'undefined') return fallback;
@@ -140,6 +216,7 @@ function readPersistedSettings(): PersistedSettings {
       recentPaths: recentPaths.length > 0 ? recentPaths : [cwd],
       accessMode: parsed.accessMode === 'full-access' ? 'full-access' : 'default',
       multiAgentEnabled: parsed.multiAgentEnabled === true,
+      autoOpenChanges: parsed.autoOpenChanges === true,
     };
   } catch {
     return fallback;
@@ -186,13 +263,21 @@ export function useCodexSocket() {
   const [recentPaths, setRecentPaths] = useState<string[]>(persisted.current.recentPaths);
   const [accessMode, setAccessMode] = useState<AccessMode>(persisted.current.accessMode);
   const [multiAgentEnabled, setMultiAgentEnabled] = useState<boolean>(persisted.current.multiAgentEnabled);
+  const [autoOpenChanges, setAutoOpenChanges] = useState<boolean>(persisted.current.autoOpenChanges);
   const socketRef = useRef<WebSocket | null>(null);
   const manualStopRef = useRef(false);
+  const flushInFlightRef = useRef(false);
+  const busyRef = useRef(false);
+  const activeConversationIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ cwd, recentPaths, accessMode, multiAgentEnabled }));
-  }, [cwd, recentPaths, accessMode, multiAgentEnabled]);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ cwd, recentPaths, accessMode, multiAgentEnabled, autoOpenChanges }));
+  }, [cwd, recentPaths, accessMode, multiAgentEnabled, autoOpenChanges]);
+
+  useEffect(() => {
+    busyRef.current = state.connectionState === 'connected' && state.isRunning;
+  }, [state.connectionState, state.isRunning]);
 
   const updateCwd = useCallback((value: string) => {
     setCwd(convertWindowsPath(value));
@@ -205,18 +290,49 @@ export function useCodexSocket() {
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close();
   }, []);
 
-  const connect = useCallback(() => {
+  const sendPromptNow = useCallback((text: string, options = { echoUserMessage: true }) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      dispatch({ type: 'error', payload: 'Socket is not connected.' });
+      return false;
+    }
+
+    busyRef.current = true;
+    dispatch({ type: 'promptDispatched' });
+    socket.send(JSON.stringify({ type: 'prompt', text }));
+    if (options.echoUserMessage) {
+      dispatch({ type: 'message', payload: createMessage('user', text) });
+    }
+    dispatch({ type: 'error', payload: null });
+    return true;
+  }, []);
+
+  const connect = useCallback((overrides: ConnectionOverrides = {}) => {
     closeSocket();
     manualStopRef.current = false;
-    const trimmedCwd = cwd.trim();
+    const nextCwd = typeof overrides.cwd === 'string' ? overrides.cwd : cwd;
+    const nextAccessMode = typeof overrides.accessMode === 'string' ? overrides.accessMode : accessMode;
+    const nextMultiAgentEnabled =
+      typeof overrides.multiAgentEnabled === 'boolean' ? overrides.multiAgentEnabled : multiAgentEnabled;
+    const nextConversationId =
+      typeof overrides.conversationId === 'string' ? overrides.conversationId : activeConversationIdRef.current;
+    const trimmedCwd = nextCwd.trim();
     setRecentPaths((current) => pushRecentPath(current, trimmedCwd));
     dispatch({ type: 'connection', payload: 'connecting' });
     dispatch({ type: 'error', payload: null });
     dispatch({ type: 'message', payload: createMessage('system', 'Connecting to Codex backend...') });
 
-    const wsUrl = `ws://localhost:3001/ws?cwd=${encodeURIComponent(trimmedCwd)}&accessMode=${encodeURIComponent(
-      accessMode
-    )}&multiAgent=${multiAgentEnabled ? '1' : '0'}`;
+    const params = new URLSearchParams({
+      cwd: trimmedCwd,
+      accessMode: nextAccessMode,
+      multiAgent: nextMultiAgentEnabled ? '1' : '0',
+    });
+
+    if (nextConversationId) {
+      params.set('conversationId', nextConversationId);
+    }
+
+    const wsUrl = `ws://localhost:3001/ws?${params.toString()}`;
     const socket = new WebSocket(wsUrl);
     socketRef.current = socket;
 
@@ -242,6 +358,10 @@ export function useCodexSocket() {
           method?: string;
           params?: Record<string, unknown>;
           action?: string;
+          available?: boolean;
+          repoRoot?: string | null;
+          reason?: string;
+          files?: TurnDiff['files'];
         };
 
         switch (payload.type) {
@@ -259,6 +379,20 @@ export function useCodexSocket() {
             break;
           case 'turn.completed':
             if (payload.turnId) dispatch({ type: 'turnCompleted', payload: { turnId: payload.turnId, error: payload.error } });
+            break;
+          case 'turn.diff':
+            if (payload.turnId) {
+              dispatch({
+                type: 'turnDiff',
+                payload: {
+                  turnId: payload.turnId,
+                  available: payload.available !== false,
+                  repoRoot: payload.repoRoot ?? null,
+                  reason: payload.reason,
+                  files: Array.isArray(payload.files) ? payload.files : [],
+                },
+              });
+            }
             break;
           case 'thread.status':
             if (payload.status) {
@@ -333,12 +467,27 @@ export function useCodexSocket() {
   }, [accessMode, closeSocket, cwd, multiAgentEnabled]);
 
   useEffect(() => {
-    connect();
     return () => {
       manualStopRef.current = true;
       closeSocket();
     };
-  }, []);
+  }, [closeSocket]);
+
+  useEffect(() => {
+    if (state.connectionState !== 'connected' || state.isRunning || flushInFlightRef.current || state.queuedPrompts.length === 0) {
+      return;
+    }
+
+    const nextPrompt = state.queuedPrompts[0];
+    flushInFlightRef.current = true;
+    dispatch({ type: 'dequeuePrompt', payload: { id: nextPrompt.id } });
+    const sent = sendPromptNow(nextPrompt.text, { echoUserMessage: false });
+    flushInFlightRef.current = false;
+
+    if (!sent) {
+      dispatch({ type: 'enqueuePrompt', payload: nextPrompt });
+    }
+  }, [sendPromptNow, state.connectionState, state.isRunning, state.queuedPrompts]);
 
   const stopSession = useCallback(() => {
     const socket = socketRef.current;
@@ -355,6 +504,52 @@ export function useCodexSocket() {
   const startSession = useCallback(() => {
     connect();
   }, [connect]);
+
+  const openConversation = useCallback(
+    (conversation: StoredConversation) => {
+      activeConversationIdRef.current = conversation.id;
+      setCwd(conversation.cwd);
+      setAccessMode(conversation.accessMode);
+      setMultiAgentEnabled(conversation.multiAgentEnabled);
+      dispatch({
+        type: 'hydrateConversation',
+        payload: {
+          messages: conversation.messages || [],
+          turnDiffs: conversation.turnDiffs || [],
+        },
+      });
+      connect({
+        cwd: conversation.cwd,
+        accessMode: conversation.accessMode,
+        multiAgentEnabled: conversation.multiAgentEnabled,
+        conversationId: conversation.id,
+      });
+    },
+    [connect]
+  );
+
+  const startFreshConversation = useCallback(
+    (conversation: StoredConversation) => {
+      activeConversationIdRef.current = conversation.id;
+      setCwd(conversation.cwd);
+      setAccessMode(conversation.accessMode);
+      setMultiAgentEnabled(conversation.multiAgentEnabled);
+      dispatch({
+        type: 'hydrateConversation',
+        payload: {
+          messages: [],
+          turnDiffs: [],
+        },
+      });
+      connect({
+        cwd: conversation.cwd,
+        accessMode: conversation.accessMode,
+        multiAgentEnabled: conversation.multiAgentEnabled,
+        conversationId: conversation.id,
+      });
+    },
+    [connect]
+  );
 
   const handleCommand = useCallback(
     (input: string) => {
@@ -413,18 +608,27 @@ export function useCodexSocket() {
       if (!trimmed) return false;
       if (handleCommand(trimmed)) return true;
 
-      const socket = socketRef.current;
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
+      if (state.connectionState !== 'connected') {
         dispatch({ type: 'error', payload: 'Socket is not connected.' });
         return false;
       }
 
-      socket.send(JSON.stringify({ type: 'prompt', text: trimmed }));
-      dispatch({ type: 'message', payload: createMessage('user', trimmed) });
-      dispatch({ type: 'error', payload: null });
-      return true;
+      if (busyRef.current) {
+        dispatch({
+          type: 'enqueuePrompt',
+          payload: {
+            id: crypto.randomUUID(),
+            text: trimmed,
+            timestamp: Date.now(),
+          },
+        });
+        dispatch({ type: 'error', payload: null });
+        return true;
+      }
+
+      return sendPromptNow(trimmed);
     },
-    [handleCommand]
+    [handleCommand, sendPromptNow, state.connectionState]
   );
 
   const respondToApproval = useCallback((requestId: string | number, action: 'approve' | 'approve-session' | 'decline' | 'cancel') => {
@@ -440,7 +644,9 @@ export function useCodexSocket() {
     sessionId: state.sessionId,
     error: state.error,
     isRunning: state.isRunning,
-    canSend: state.connectionState === 'connected' && !state.isRunning,
+    turnDiffs: state.turnDiffs,
+    queuedPrompts: state.queuedPrompts,
+    canSend: state.connectionState === 'connected',
     cwd,
     setCwd: updateCwd,
     convertWindowsPath,
@@ -457,9 +663,16 @@ export function useCodexSocket() {
     setAccessMode,
     multiAgentEnabled,
     setMultiAgentEnabled,
+    autoOpenChanges,
+    setAutoOpenChanges,
+    activeConversationId: activeConversationIdRef.current,
+    openConversation,
+    startFreshConversation,
     sendInput,
     stopSession,
     startSession,
     respondToApproval,
+    removeTurnDiff: (turnId: string) => dispatch({ type: 'removeTurnDiff', payload: { turnId } }),
+    removeTurnDiffFile: (turnId: string, path: string) => dispatch({ type: 'removeTurnDiffFile', payload: { turnId, path } }),
   };
 }

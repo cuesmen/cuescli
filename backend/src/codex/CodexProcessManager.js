@@ -8,15 +8,11 @@ class CodexProcessManager {
     this.codexBin = options.codexBin;
     this.codexCwd = options.codexCwd;
     this.logger = options.logger;
-    this.sessions = new Map();
+    this.clientSessions = new Map();
+    this.conversationSessions = new Map();
   }
 
-  async createSession(clientId, handlers, sessionOptions = {}) {
-    if (this.sessions.has(clientId)) {
-      throw new Error(`Session already exists for client ${clientId}`);
-    }
-
-    const resolvedCwd = sessionOptions.cwd || this.codexCwd;
+  async validateCwd(resolvedCwd) {
     let cwdStats;
 
     try {
@@ -28,41 +24,125 @@ class CodexProcessManager {
     if (!cwdStats.isDirectory()) {
       throw new Error(`Working directory is not a directory: ${resolvedCwd}`);
     }
+  }
 
-    const sessionLogger = this.logger.child({ clientId });
+  fanOut(record, callbackName, ...args) {
+    for (const handlers of record.subscribers.values()) {
+      const callback = handlers[callbackName];
+      if (typeof callback === 'function') {
+        callback(...args);
+      }
+    }
+  }
+
+  cleanupRecord(record) {
+    for (const clientId of record.subscribers.keys()) {
+      this.clientSessions.delete(clientId);
+    }
+
+    if (record.conversationId) {
+      const mapped = this.conversationSessions.get(record.conversationId);
+      if (mapped === record) {
+        this.conversationSessions.delete(record.conversationId);
+      }
+    }
+  }
+
+  async createSession(clientId, handlers, sessionOptions = {}) {
+    if (this.clientSessions.has(clientId)) {
+      throw new Error(`Session already exists for client ${clientId}`);
+    }
+
+    const resolvedCwd = sessionOptions.cwd || this.codexCwd;
+    await this.validateCwd(resolvedCwd);
+
+    const conversationId = sessionOptions.conversationId || null;
+    if (conversationId && this.conversationSessions.has(conversationId)) {
+      const existingRecord = this.conversationSessions.get(conversationId);
+      existingRecord.subscribers.set(clientId, handlers);
+      this.clientSessions.set(clientId, existingRecord);
+      existingRecord.logger.info(
+        { clientId, sessionId: existingRecord.session.sessionId, conversationId },
+        'reattached client to existing codex session'
+      );
+
+      existingRecord.session.ready
+        .then((info) => {
+          handlers.onReady(info);
+        })
+        .catch((error) => {
+          handlers.onError(error);
+        });
+
+      return existingRecord.session;
+    }
+
+    const sessionLogger = this.logger.child({ clientId, conversationId });
+    const record = {
+      conversationId,
+      subscribers: new Map([[clientId, handlers]]),
+      session: null,
+      logger: sessionLogger,
+    };
+
     const session = createCodexSession({
       codexBin: this.codexBin,
       codexCwd: resolvedCwd,
       accessMode: sessionOptions.accessMode || 'default',
       multiAgentEnabled: Boolean(sessionOptions.multiAgentEnabled),
       logger: sessionLogger,
-      onReady: handlers.onReady,
-      onAssistantDelta: handlers.onAssistantDelta,
-      onTurnCompleted: handlers.onTurnCompleted,
-      onThreadStatus: handlers.onThreadStatus,
-      onApprovalRequest: handlers.onApprovalRequest,
-      onWarning: handlers.onWarning,
+      onReady: (payload) => {
+        this.fanOut(record, 'onReady', payload);
+      },
+      onAssistantDelta: (payload) => {
+        this.fanOut(record, 'onAssistantDelta', payload);
+      },
+      onTurnCompleted: (payload) => {
+        this.fanOut(record, 'onTurnCompleted', payload);
+      },
+      onTurnDiff: (payload) => {
+        this.fanOut(record, 'onTurnDiff', payload);
+      },
+      onThreadStatus: (payload) => {
+        this.fanOut(record, 'onThreadStatus', payload);
+      },
+      onApprovalRequest: (payload) => {
+        this.fanOut(record, 'onApprovalRequest', payload);
+      },
+      onWarning: (payload) => {
+        this.fanOut(record, 'onWarning', payload);
+      },
       onExit: (payload) => {
-        this.sessions.delete(clientId);
-        handlers.onExit(payload);
+        this.cleanupRecord(record);
+        this.fanOut(record, 'onExit', payload);
       },
       onError: (error) => {
-        this.sessions.delete(clientId);
-        handlers.onError(error);
+        this.cleanupRecord(record);
+        this.fanOut(record, 'onError', error);
       },
     });
 
-    this.sessions.set(clientId, session);
+    record.session = session;
+    this.clientSessions.set(clientId, record);
+
+    if (conversationId) {
+      this.conversationSessions.set(conversationId, record);
+    }
+
     sessionLogger.info(
-      { clientId, sessionId: session.sessionId },
+      { clientId, sessionId: session.sessionId, conversationId },
       'codex session registered'
     );
 
     return session;
   }
 
+  getSessionRecord(clientId) {
+    return this.clientSessions.get(clientId);
+  }
+
   getSession(clientId) {
-    return this.sessions.get(clientId);
+    return this.getSessionRecord(clientId)?.session;
   }
 
   async sendPrompt(clientId, input) {
@@ -85,20 +165,42 @@ class CodexProcessManager {
     return session.resolveApproval(requestId, action);
   }
 
-  terminateSession(clientId, signal) {
-    const session = this.getSession(clientId);
+  detachClient(clientId) {
+    const record = this.getSessionRecord(clientId);
 
-    if (!session) {
+    if (!record) {
       return false;
     }
 
-    return session.terminate(signal);
+    record.subscribers.delete(clientId);
+    this.clientSessions.delete(clientId);
+
+    if (!record.conversationId && record.subscribers.size === 0) {
+      record.session.terminate('SIGTERM');
+    }
+
+    return true;
+  }
+
+  terminateSession(clientId, signal) {
+    const record = this.getSessionRecord(clientId);
+
+    if (!record) {
+      return false;
+    }
+
+    this.cleanupRecord(record);
+    return record.session.terminate(signal);
   }
 
   terminateAll(signal = 'SIGTERM') {
-    for (const [clientId, session] of this.sessions.entries()) {
-      this.logger.info({ clientId, sessionId: session.sessionId, signal }, 'terminating session');
-      session.terminate(signal);
+    const uniqueRecords = new Set(this.clientSessions.values());
+    for (const record of uniqueRecords) {
+      this.logger.info(
+        { sessionId: record.session.sessionId, conversationId: record.conversationId, signal },
+        'terminating session'
+      );
+      record.session.terminate(signal);
     }
   }
 }

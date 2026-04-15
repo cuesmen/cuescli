@@ -13,6 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "fastify": "^5.8.5",
+    "simple-git": "^3.28.0",
     "ws": "^8.20.0"
   }
 }

@@ -4,6 +4,7 @@ const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const net = require('node:net');
 const { WebSocket } = require('ws');
+const { createGitTracker } = require('../git/createGitTracker');
 
 function delay(ms) {
   return new Promise((resolve) => {
@@ -97,6 +98,7 @@ function createCodexSession(options) {
     onReady,
     onAssistantDelta,
     onTurnCompleted,
+    onTurnDiff,
     onThreadStatus,
     onApprovalRequest,
     onWarning,
@@ -115,8 +117,10 @@ function createCodexSession(options) {
   let nextRequestId = 1;
   const pendingRequests = new Map();
   const pendingApprovalRequests = new Map();
+  const turnSnapshots = new Map();
   const readyDeferred = createDeferred();
   readyDeferred.promise.catch(() => {});
+  let gitTrackerPromise = createGitTracker(codexCwd, logger);
 
   function getThreadConfig() {
     if (accessMode === 'full-access') {
@@ -167,6 +171,27 @@ function createCodexSession(options) {
     pendingRequests.clear();
   }
 
+  async function emitTurnCompleted(params) {
+    const turn = params?.turn;
+    if (turn?.id && turnSnapshots.has(turn.id)) {
+      const beforeSnapshot = turnSnapshots.get(turn.id) || null;
+      turnSnapshots.delete(turn.id);
+
+      try {
+        const gitTracker = await gitTrackerPromise;
+        const diff = await gitTracker.collectChangesSince(beforeSnapshot);
+        onTurnDiff({
+          turnId: turn.id,
+          ...diff,
+        });
+      } catch (error) {
+        logger.warn({ err: error, sessionId, turnId: turn.id }, 'failed to collect git diff for turn');
+      }
+    }
+
+    onTurnCompleted(params);
+  }
+
   function handleProtocolMessage(message) {
     if (message.id !== undefined && pendingRequests.has(message.id)) {
       const deferred = pendingRequests.get(message.id);
@@ -192,7 +217,7 @@ function createCodexSession(options) {
         onAssistantDelta(message.params);
         break;
       case 'turn/completed':
-        onTurnCompleted(message.params);
+        void emitTurnCompleted(message.params);
         break;
       case 'thread/status/changed':
         onThreadStatus(message.params);
@@ -395,6 +420,9 @@ function createCodexSession(options) {
       throw new Error('Codex thread is not initialized');
     }
 
+    const gitTracker = await gitTrackerPromise;
+    const beforeSnapshot = await gitTracker.captureSnapshot();
+
     const turnConfig = getTurnConfig();
     const baseParams = {
       threadId,
@@ -425,7 +453,11 @@ function createCodexSession(options) {
         : baseParams;
 
     try {
-      return await sendRequest('turn/start', multiAgentParams);
+      const result = await sendRequest('turn/start', multiAgentParams);
+      if (result?.turn?.id) {
+        turnSnapshots.set(result.turn.id, beforeSnapshot);
+      }
+      return result;
     } catch (error) {
       if (
         multiAgentEnabled &&
@@ -435,7 +467,11 @@ function createCodexSession(options) {
         onWarning(
           'Multi-agent mode is not supported by the current Codex app-server build. Falling back to standard mode.'
         );
-        return sendRequest('turn/start', baseParams);
+        const result = await sendRequest('turn/start', baseParams);
+        if (result?.turn?.id) {
+          turnSnapshots.set(result.turn.id, beforeSnapshot);
+        }
+        return result;
       }
 
       throw error;
@@ -504,6 +540,18 @@ function createCodexSession(options) {
     get pid() {
       return child ? child.pid : null;
     },
+    get threadId() {
+      return threadId;
+    },
+    get model() {
+      return model;
+    },
+    ready: readyDeferred.promise.then(() => ({
+      sessionId,
+      threadId,
+      pid: child ? child.pid : null,
+      model,
+    })),
     sendPrompt,
     resolveApproval,
     terminate,

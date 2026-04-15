@@ -1,4 +1,5 @@
-import { FiChevronLeft, FiMessageSquare, FiSettings } from 'react-icons/fi';
+import { FiChevronLeft, FiMessageSquare, FiPlus, FiSettings } from 'react-icons/fi';
+import type { StoredConversation } from '../types';
 
 type SidebarProps = {
   currentView: 'chat' | 'config';
@@ -6,9 +7,23 @@ type SidebarProps = {
   sessionActive: boolean;
   collapsed: boolean;
   onToggle: () => void;
+  conversations: StoredConversation[];
+  activeConversationId: string | null;
+  onSelectConversation: (id: string) => void;
+  onCreateConversation: () => void;
 };
 
-export function Sidebar({ currentView, onChangeView, sessionActive, collapsed, onToggle }: SidebarProps) {
+export function Sidebar({
+  currentView,
+  onChangeView,
+  sessionActive,
+  collapsed,
+  onToggle,
+  conversations,
+  activeConversationId,
+  onSelectConversation,
+  onCreateConversation,
+}: SidebarProps) {
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
       <div className="sidebar-brand">
@@ -47,6 +62,29 @@ export function Sidebar({ currentView, onChangeView, sessionActive, collapsed, o
           <small>session</small>
         </button>
       </nav>
+
+      <div className="sidebar-conversations">
+        <div className="sidebar-conversations__header">
+          <strong>Conversations</strong>
+          <button type="button" className="sidebar-mini-btn" onClick={onCreateConversation} aria-label="Create new conversation">
+            <FiPlus size={15} />
+          </button>
+        </div>
+
+        <div className="sidebar-conversations__list">
+          {conversations.map((conversation) => (
+            <button
+              key={conversation.id}
+              type="button"
+              className={`conversation-item ${activeConversationId === conversation.id ? 'conversation-item--active' : ''}`}
+              onClick={() => onSelectConversation(conversation.id)}
+            >
+              <strong>{conversation.title}</strong>
+              <span>{conversation.cwd}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </aside>
   );
 }

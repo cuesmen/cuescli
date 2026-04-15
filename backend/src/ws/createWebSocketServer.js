@@ -42,9 +42,11 @@ function createWebSocketServer(options) {
     const requestUrl = new URL(request.url, 'http://localhost');
     const requestedCwd = requestUrl.searchParams.get('cwd');
     const requestedAccessMode = requestUrl.searchParams.get('accessMode');
+    const conversationId = requestUrl.searchParams.get('conversationId');
     const multiAgentEnabled = requestUrl.searchParams.get('multiAgent') === '1';
     const logger = fastify.log.child({
       clientId,
+      conversationId,
       remoteAddress: request.socket.remoteAddress,
       requestedCwd,
       requestedAccessMode,
@@ -79,6 +81,12 @@ function createWebSocketServer(options) {
             turnId: turn.id,
             status: turn.status,
             error: turn.error,
+          });
+        },
+        onTurnDiff: (diffPayload) => {
+          sendMessage(socket, {
+            type: 'turn.diff',
+            ...diffPayload,
           });
         },
         onThreadStatus: ({ threadId, status }) => {
@@ -116,6 +124,7 @@ function createWebSocketServer(options) {
       }, {
         cwd: requestedCwd || undefined,
         accessMode: requestedAccessMode || undefined,
+        conversationId: conversationId || undefined,
         multiAgentEnabled,
       })
       .then((createdSession) => {
@@ -207,16 +216,12 @@ function createWebSocketServer(options) {
         },
         'websocket client disconnected'
       );
-      if (session) {
-        manager.terminateSession(clientId, 'SIGTERM');
-      }
+      manager.detachClient(clientId);
     });
 
     socket.on('error', (error) => {
       logger.error({ err: error }, 'websocket error');
-      if (session) {
-        manager.terminateSession(clientId, 'SIGTERM');
-      }
+      manager.detachClient(clientId);
     });
   });
 

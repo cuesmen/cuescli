@@ -2,6 +2,7 @@ import { FiShield, FiUnlock, FiX } from 'react-icons/fi';
 import type { ConnectionState } from '../types';
 
 type AccessMode = 'default' | 'full-access';
+type ResumeBehavior = 'ask' | 'last' | 'new';
 
 type ConfigPanelProps = {
   connectionState: ConnectionState;
@@ -17,6 +18,10 @@ type ConfigPanelProps = {
   onAccessModeChange: (value: AccessMode) => void;
   multiAgentEnabled: boolean;
   onMultiAgentChange: (checked: boolean) => void;
+  autoOpenChanges: boolean;
+  onAutoOpenChangesChange: (checked: boolean) => void;
+  resumeBehavior: ResumeBehavior;
+  onResumeBehaviorChange: (value: ResumeBehavior) => void;
   onStart: () => void;
   onStop: () => void;
   showThreadStatus: boolean;
@@ -38,6 +43,10 @@ export function ConfigPanel(props: ConfigPanelProps) {
     onAccessModeChange,
     multiAgentEnabled,
     onMultiAgentChange,
+    autoOpenChanges,
+    onAutoOpenChangesChange,
+    resumeBehavior,
+    onResumeBehaviorChange,
     onStart,
     onStop,
     showThreadStatus,
@@ -171,6 +180,32 @@ export function ConfigPanel(props: ConfigPanelProps) {
           </div>
         </section>
 
+        <section className="field-block field-block--spaced">
+          <div className="segmented-header">
+            <span className="status-label">Startup Resume</span>
+            <span className="config-note">Choose what happens when the UI restarts: ask, reopen the last chat, or always start a new one.</span>
+          </div>
+          <div className="segmented-control segmented-control--three" role="radiogroup" aria-label="Startup resume behavior">
+            {[
+              { value: 'ask', title: 'Ask', description: 'Show a startup dialog so you can choose what to resume.' },
+              { value: 'last', title: 'Resume Last', description: 'Automatically reopen the most recent conversation.' },
+              { value: 'new', title: 'Always New', description: 'Always start a fresh conversation on startup.' },
+            ].map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="radio"
+                aria-checked={resumeBehavior === option.value}
+                className={`segment ${resumeBehavior === option.value ? 'segment--active' : ''}`}
+                onClick={() => onResumeBehaviorChange(option.value as ResumeBehavior)}
+              >
+                <strong className="segment__title">{option.title}</strong>
+                <span>{option.description}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
         <div className="config-toggles">
           <label className="toggle-card">
             <input
@@ -181,6 +216,18 @@ export function ConfigPanel(props: ConfigPanelProps) {
             <div>
               <strong>Multi-agent mode</strong>
               <p>Experimental. Falls back automatically if unsupported by the current app-server build.</p>
+            </div>
+          </label>
+
+          <label className="toggle-card">
+            <input
+              type="checkbox"
+              checked={autoOpenChanges}
+              onChange={(event) => onAutoOpenChangesChange(event.target.checked)}
+            />
+            <div>
+              <strong>Auto-open Files Modified</strong>
+              <p>When enabled, the changes drawer opens automatically only if a turn produced actual file changes.</p>
             </div>
           </label>
 

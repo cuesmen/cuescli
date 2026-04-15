@@ -1,0 +1,90 @@
+# =========================
+# Node.js
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# =========================
+# Env & Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+*.log.*
+*.out
+*.err
+
+# =========================
+# Runtime / Sessions (IMPORTANT per te)
+# =========================
+.sessions/
+.runtime/
+.tmp/
+.cache/
+*.pid
+*.sock
+
+# =========================
+# Codex / CLI artifacts
+# =========================
+.codex/
+.codex-cache/
+.codex-history/
+
+# =========================
+# LLM locali (Ollama ecc.)
+# =========================
+.ollama/
+models/
+*.gguf
+*.bin
+
+# =========================
+# Build / Dist
+# =========================
+dist/
+build/
+out/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Editor / IDE
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Coverage
+# =========================
+coverage/
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
+
+# =========================
+# Optional: keep config templates
+# =========================
+config/*.local.json
+config/*.secret.json

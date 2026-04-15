@@ -2,9 +2,10 @@ import { FiShield, FiUnlock, FiX } from 'react-icons/fi';
 import type { ConnectionState } from '../types';
 
 type AccessMode = 'default' | 'full-access';
-type ResumeBehavior = 'ask' | 'last' | 'new';
 
 type ConfigPanelProps = {
+  mode: 'create' | 'edit';
+  title: string;
   connectionState: ConnectionState;
   sessionId: string | null;
   error: string | null;
@@ -18,18 +19,16 @@ type ConfigPanelProps = {
   onAccessModeChange: (value: AccessMode) => void;
   multiAgentEnabled: boolean;
   onMultiAgentChange: (checked: boolean) => void;
-  autoOpenChanges: boolean;
-  onAutoOpenChangesChange: (checked: boolean) => void;
-  resumeBehavior: ResumeBehavior;
-  onResumeBehaviorChange: (value: ResumeBehavior) => void;
   onStart: () => void;
   onStop: () => void;
-  showThreadStatus: boolean;
-  onToggleThreadStatus: (checked: boolean) => void;
+  onClose: () => void;
+  onCreate?: () => void;
 };
 
 export function ConfigPanel(props: ConfigPanelProps) {
   const {
+    mode,
+    title,
     connectionState,
     sessionId,
     error,
@@ -43,55 +42,58 @@ export function ConfigPanel(props: ConfigPanelProps) {
     onAccessModeChange,
     multiAgentEnabled,
     onMultiAgentChange,
-    autoOpenChanges,
-    onAutoOpenChangesChange,
-    resumeBehavior,
-    onResumeBehaviorChange,
     onStart,
     onStop,
-    showThreadStatus,
-    onToggleThreadStatus,
+    onClose,
+    onCreate,
   } = props;
 
   return (
-    <section className="config-shell">
+    <section className="config-shell config-shell--modal">
       <div className="config-header">
         <div>
-          <p className="eyebrow">Session Config</p>
-          <h2>Codex Session Console</h2>
+          <p className="eyebrow">Conversation Settings</p>
+          <h2>{title}</h2>
         </div>
-        <span className={`connection-pill connection-pill--${connectionState}`}>
-          <span className="connection-pill__dot" />
-          {connectionState}
-        </span>
+        <button type="button" className="startup-modal__close" onClick={onClose} aria-label="Close conversation settings">
+          <FiX size={18} />
+        </button>
       </div>
 
       <div className="config-grid">
         <div className="config-card">
-          <span className="status-label">WebSocket</span>
-          <strong>ws://localhost:3001/ws</strong>
+          <span className="status-label">Session</span>
+          <strong>{mode === 'create' ? 'not started' : sessionId ?? 'waiting...'}</strong>
         </div>
         <div className="config-card">
-          <span className="status-label">Session</span>
-          <strong>{sessionId ?? 'waiting...'}</strong>
+          <span className="status-label">Status</span>
+          <strong>{connectionState}</strong>
         </div>
         <div className="config-card config-card--actions">
-          <button
-            type="button"
-            className="start-button"
-            onClick={onStart}
-            disabled={connectionState === 'connected' || connectionState === 'connecting'}
-          >
-            Start session
-          </button>
-          <button
-            type="button"
-            className="terminate-button"
-            onClick={onStop}
-            disabled={connectionState !== 'connected'}
-          >
-            Stop session
-          </button>
+          {mode === 'create' ? (
+            <button type="button" className="start-button" onClick={onCreate}>
+              Create conversation
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="start-button"
+                onClick={onStart}
+                disabled={connectionState === 'connected' || connectionState === 'connecting'}
+              >
+                Start session
+              </button>
+              <button
+                type="button"
+                className="terminate-button"
+                onClick={onStop}
+                disabled={connectionState !== 'connected'}
+              >
+                Stop session
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -102,18 +104,14 @@ export function ConfigPanel(props: ConfigPanelProps) {
           <div className="cwd-helper">
             <div className="cwd-helper__copy">
               <strong>Windows path support</strong>
-              <p>Paste a Windows path like <code>C:\Users\YourName\Desktop</code> and it will be converted for WSL.</p>
+              <p>Paste a Windows path like <code>C:\Users\YourName\Desktop</code> and convert it for WSL.</p>
               <p>WSL format example: <code>/mnt/c/Users/YourName/Desktop</code></p>
             </div>
             <div className="cwd-helper__actions">
               <button type="button" className="helper-button" onClick={onConvertWindowsPath}>
                 Convert current path
               </button>
-              <button
-                type="button"
-                className="helper-button helper-button--ghost"
-                onClick={() => onCwdChange('/mnt/c/Users')}
-              >
+              <button type="button" className="helper-button helper-button--ghost" onClick={() => onCwdChange('/mnt/c/Users')}>
                 Start from C drive
               </button>
             </div>
@@ -148,7 +146,7 @@ export function ConfigPanel(props: ConfigPanelProps) {
         <section className="field-block field-block--spaced">
           <div className="segmented-header">
             <span className="status-label">Approvals</span>
-            <span className="config-note">Matches the CLI-style access preset. Applied to the next turn and next session start.</span>
+            <span className="config-note">Applied to this conversation when starting turns and sessions.</span>
           </div>
           <div className="segmented-control segmented-control--two" role="radiogroup" aria-label="Access mode">
             {[
@@ -180,66 +178,12 @@ export function ConfigPanel(props: ConfigPanelProps) {
           </div>
         </section>
 
-        <section className="field-block field-block--spaced">
-          <div className="segmented-header">
-            <span className="status-label">Startup Resume</span>
-            <span className="config-note">Choose what happens when the UI restarts: ask, reopen the last chat, or always start a new one.</span>
-          </div>
-          <div className="segmented-control segmented-control--three" role="radiogroup" aria-label="Startup resume behavior">
-            {[
-              { value: 'ask', title: 'Ask', description: 'Show a startup dialog so you can choose what to resume.' },
-              { value: 'last', title: 'Resume Last', description: 'Automatically reopen the most recent conversation.' },
-              { value: 'new', title: 'Always New', description: 'Always start a fresh conversation on startup.' },
-            ].map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={resumeBehavior === option.value}
-                className={`segment ${resumeBehavior === option.value ? 'segment--active' : ''}`}
-                onClick={() => onResumeBehaviorChange(option.value as ResumeBehavior)}
-              >
-                <strong className="segment__title">{option.title}</strong>
-                <span>{option.description}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-
         <div className="config-toggles">
           <label className="toggle-card">
-            <input
-              type="checkbox"
-              checked={multiAgentEnabled}
-              onChange={(event) => onMultiAgentChange(event.target.checked)}
-            />
+            <input type="checkbox" checked={multiAgentEnabled} onChange={(event) => onMultiAgentChange(event.target.checked)} />
             <div>
               <strong>Multi-agent mode</strong>
               <p>Experimental. Falls back automatically if unsupported by the current app-server build.</p>
-            </div>
-          </label>
-
-          <label className="toggle-card">
-            <input
-              type="checkbox"
-              checked={autoOpenChanges}
-              onChange={(event) => onAutoOpenChangesChange(event.target.checked)}
-            />
-            <div>
-              <strong>Auto-open Files Modified</strong>
-              <p>When enabled, the changes drawer opens automatically only if a turn produced actual file changes.</p>
-            </div>
-          </label>
-
-          <label className="toggle-card">
-            <input
-              type="checkbox"
-              checked={showThreadStatus}
-              onChange={(event) => onToggleThreadStatus(event.target.checked)}
-            />
-            <div>
-              <strong>Thread status logs</strong>
-              <p>Show internal status transitions like active and idle inside the chat feed.</p>
             </div>
           </label>
         </div>

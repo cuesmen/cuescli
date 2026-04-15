@@ -14,6 +14,7 @@ type ConnectionOverrides = {
   accessMode?: AccessMode;
   multiAgentEnabled?: boolean;
   conversationId?: string;
+  announce?: boolean;
 };
 
 type State = {
@@ -269,6 +270,7 @@ export function useCodexSocket() {
   const flushInFlightRef = useRef(false);
   const busyRef = useRef(false);
   const activeConversationIdRef = useRef<string | null>(null);
+  const suppressNextCloseMessageRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -308,6 +310,11 @@ export function useCodexSocket() {
   }, []);
 
   const connect = useCallback((overrides: ConnectionOverrides = {}) => {
+    const announce = overrides.announce !== false;
+    if (!announce) {
+      suppressNextCloseMessageRef.current = true;
+    }
+
     closeSocket();
     manualStopRef.current = false;
     const nextCwd = typeof overrides.cwd === 'string' ? overrides.cwd : cwd;
@@ -320,7 +327,9 @@ export function useCodexSocket() {
     setRecentPaths((current) => pushRecentPath(current, trimmedCwd));
     dispatch({ type: 'connection', payload: 'connecting' });
     dispatch({ type: 'error', payload: null });
-    dispatch({ type: 'message', payload: createMessage('system', 'Connecting to Codex backend...') });
+    if (announce) {
+      dispatch({ type: 'message', payload: createMessage('system', 'Connecting to Codex backend...') });
+    }
 
     const params = new URLSearchParams({
       cwd: trimmedCwd,
@@ -338,7 +347,9 @@ export function useCodexSocket() {
 
     socket.addEventListener('open', () => {
       dispatch({ type: 'connection', payload: 'connected' });
-      dispatch({ type: 'message', payload: createMessage('system', 'Connection established.') });
+      if (announce) {
+        dispatch({ type: 'message', payload: createMessage('system', 'Connection established.') });
+      }
     });
 
     socket.addEventListener('message', (event) => {
@@ -368,7 +379,9 @@ export function useCodexSocket() {
           case 'session.started':
             if (payload.sessionId) {
               dispatch({ type: 'session', payload: payload.sessionId });
-              dispatch({ type: 'message', payload: createMessage('system', `Codex session started: ${payload.sessionId}`) });
+              if (announce) {
+                dispatch({ type: 'message', payload: createMessage('system', `Codex session started: ${payload.sessionId}`) });
+              }
             }
             break;
           case 'assistant.delta':
@@ -462,6 +475,10 @@ export function useCodexSocket() {
 
     socket.addEventListener('close', () => {
       dispatch({ type: 'clearSession' });
+      if (suppressNextCloseMessageRef.current) {
+        suppressNextCloseMessageRef.current = false;
+        return;
+      }
       if (!manualStopRef.current) dispatch({ type: 'message', payload: createMessage('system', 'Connection closed.') });
     });
   }, [accessMode, closeSocket, cwd, multiAgentEnabled]);
@@ -523,6 +540,7 @@ export function useCodexSocket() {
         accessMode: conversation.accessMode,
         multiAgentEnabled: conversation.multiAgentEnabled,
         conversationId: conversation.id,
+        announce: false,
       });
     },
     [connect]
@@ -546,6 +564,7 @@ export function useCodexSocket() {
         accessMode: conversation.accessMode,
         multiAgentEnabled: conversation.multiAgentEnabled,
         conversationId: conversation.id,
+        announce: false,
       });
     },
     [connect]
@@ -638,6 +657,13 @@ export function useCodexSocket() {
     return true;
   }, []);
 
+  const terminateConversation = useCallback((conversationId: string, signal = 'SIGTERM') => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ type: 'terminate.conversation', conversationId, signal }));
+    return true;
+  }, []);
+
   return {
     connectionState: state.connectionState,
     messages: state.messages,
@@ -672,6 +698,7 @@ export function useCodexSocket() {
     stopSession,
     startSession,
     respondToApproval,
+    terminateConversation,
     removeTurnDiff: (turnId: string) => dispatch({ type: 'removeTurnDiff', payload: { turnId } }),
     removeTurnDiffFile: (turnId: string, path: string) => dispatch({ type: 'removeTurnDiffFile', payload: { turnId, path } }),
   };

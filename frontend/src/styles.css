@@ -163,21 +163,61 @@ textarea {
   background: rgba(255, 255, 255, 0.025);
   color: #eaf5ef;
   border-radius: 16px;
-  padding: 12px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conversation-item__main {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 6px 8px;
   text-align: left;
   cursor: pointer;
 }
 
-.conversation-item strong,
-.conversation-item span {
+.conversation-item__main strong,
+.conversation-item__main span {
   display: block;
 }
 
-.conversation-item span {
+.conversation-item__main span {
   margin-top: 4px;
   color: #89a097;
   font-size: 0.78rem;
   overflow-wrap: anywhere;
+}
+
+.conversation-item__remove {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #b7cdc3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.conversation-item__settings {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #b7cdc3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
 }
 
 .conversation-item--active {
@@ -246,6 +286,13 @@ textarea {
   padding: 24px;
   overflow: auto;
   min-height: 0;
+}
+
+.config-shell--modal {
+  position: relative;
+  width: min(980px, calc(100% - 48px));
+  max-height: min(88vh, 920px);
+  z-index: 6;
 }
 
 .config-header,

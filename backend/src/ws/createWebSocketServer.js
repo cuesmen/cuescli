@@ -170,6 +170,15 @@ function createWebSocketServer(options) {
             manager.terminateSession(clientId, signal);
             break;
           }
+          case 'terminate.conversation': {
+            if (typeof message.conversationId !== 'string' || !message.conversationId) {
+              throw new Error('terminate.conversation.conversationId is required');
+            }
+
+            const signal = typeof message.signal === 'string' ? message.signal : 'SIGTERM';
+            manager.terminateConversation(message.conversationId, signal);
+            break;
+          }
           case 'approval.respond': {
             if (typeof message.requestId !== 'number' && typeof message.requestId !== 'string') {
               throw new Error('approval.respond.requestId is required');

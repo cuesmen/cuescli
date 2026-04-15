@@ -1,5 +1,6 @@
 import { FiSidebar, FiX } from 'react-icons/fi';
 import { useEffect, useMemo, useState } from 'react';
+import { AppConfigPanel } from './components/AppConfigPanel';
 import { ChatView } from './components/ChatView';
 import { ConfigPanel } from './components/ConfigPanel';
 import { InputBox } from './components/InputBox';
@@ -14,6 +15,7 @@ const ACTIVE_CONVERSATION_KEY = 'cuescli.activeConversationId.v1';
 const RESUME_BEHAVIOR_KEY = 'cuescli.resumeBehavior.v1';
 
 type ResumeBehavior = 'ask' | 'last' | 'new';
+type ConversationSettingsMode = 'create' | 'edit';
 
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') {
@@ -63,6 +65,14 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [startupHandled, setStartupHandled] = useState(false);
   const [startupDialogOpen, setStartupDialogOpen] = useState(false);
+  const [conversationSettingsOpen, setConversationSettingsOpen] = useState(false);
+  const [conversationSettingsMode, setConversationSettingsMode] = useState<ConversationSettingsMode>('edit');
+  const [newConversationDraft, setNewConversationDraft] = useState({
+    title: 'New Conversation',
+    cwd: '/home/cues/cuescli/backend',
+    accessMode: 'default' as const,
+    multiAgentEnabled: false,
+  });
   const [resumeBehavior, setResumeBehavior] = useState<ResumeBehavior>(() => {
     const value = typeof window === 'undefined' ? null : window.localStorage.getItem(RESUME_BEHAVIOR_KEY);
     return value === 'last' || value === 'new' ? value : 'ask';
@@ -123,6 +133,7 @@ export default function App() {
     stopSession,
     startSession,
     respondToApproval,
+    terminateConversation,
     removeTurnDiff,
     removeTurnDiffFile,
   } = useCodexSocket();
@@ -236,18 +247,22 @@ export default function App() {
   }, [activeConversationId, conversations, openConversation, resumeBehavior, startFreshConversation, startupHandled]);
 
   const handleCreateConversation = () => {
-    const freshConversation = createConversation({
+    setNewConversationDraft({
+      title: 'New Conversation',
       cwd,
       accessMode,
       multiAgentEnabled,
     });
-    setConversations((current) => [freshConversation, ...current]);
-    setCurrentView('chat');
-    startFreshConversation(freshConversation);
-    setActiveConversationId(freshConversation.id);
+    setConversationSettingsMode('create');
+    setConversationSettingsOpen(true);
   };
 
   const handleSelectConversation = (conversationId: string) => {
+    if (conversationId === activeConversationId) {
+      setCurrentView('chat');
+      return;
+    }
+
     const selectedConversation = conversations.find((conversation) => conversation.id === conversationId);
     if (!selectedConversation) {
       return;
@@ -256,6 +271,72 @@ export default function App() {
     setCurrentView('chat');
     openConversation(selectedConversation);
     setActiveConversationId(selectedConversation.id);
+  };
+
+  const handleOpenConversationSettings = (conversationId: string) => {
+    if (conversationId !== activeConversationId) {
+      handleSelectConversation(conversationId);
+    }
+    setConversationSettingsMode('edit');
+    setConversationSettingsOpen(true);
+  };
+
+  const handleCreateConversationFromDraft = () => {
+    const freshConversation = createConversation({
+      title: newConversationDraft.title.trim() || 'New Conversation',
+      cwd: newConversationDraft.cwd,
+      accessMode: newConversationDraft.accessMode,
+      multiAgentEnabled: newConversationDraft.multiAgentEnabled,
+    });
+    setConversations((current) => [freshConversation, ...current]);
+    setCurrentView('chat');
+    startFreshConversation(freshConversation);
+    setActiveConversationId(freshConversation.id);
+    setConversationSettingsOpen(false);
+    setConversationSettingsMode('edit');
+  };
+
+  const handleDeleteConversation = (conversationId: string) => {
+    const conversationToDelete = conversations.find((conversation) => conversation.id === conversationId);
+    if (!conversationToDelete) {
+      return;
+    }
+
+    const shouldDelete = typeof window === 'undefined'
+      ? true
+      : window.confirm(`Delete conversation "${conversationToDelete.title}"?`);
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    const remaining = conversations.filter((conversation) => conversation.id !== conversationId);
+    setConversations(remaining);
+    terminateConversation(conversationId);
+
+    if (conversationId !== activeConversationId) {
+      return;
+    }
+
+    stopSession();
+
+    if (remaining.length === 0) {
+      const freshConversation = createConversation({
+        cwd,
+        accessMode,
+        multiAgentEnabled,
+      });
+      setConversations([freshConversation]);
+      startFreshConversation(freshConversation);
+      setActiveConversationId(freshConversation.id);
+      setCurrentView('chat');
+      return;
+    }
+
+    const nextConversation = remaining[0];
+    openConversation(nextConversation);
+    setActiveConversationId(nextConversation.id);
+    setCurrentView('chat');
   };
 
   const handleStartupChoice = (mode: 'last' | 'new' | 'pick', conversationId?: string) => {
@@ -301,6 +382,8 @@ export default function App() {
         activeConversationId={activeConversationId}
         onSelectConversation={handleSelectConversation}
         onCreateConversation={handleCreateConversation}
+        onDeleteConversation={handleDeleteConversation}
+        onOpenConversationSettings={handleOpenConversationSettings}
       />
 
       <div className={`app-panel ${sidebarCollapsed ? 'app-panel--sidebar-collapsed' : ''}`}>
@@ -333,7 +416,49 @@ export default function App() {
               />
             </>
           ) : (
+            <AppConfigPanel
+              resumeBehavior={resumeBehavior}
+              onResumeBehaviorChange={setResumeBehavior}
+              autoOpenChanges={autoOpenChanges}
+              onAutoOpenChangesChange={setAutoOpenChanges}
+              showThreadStatus={showThreadStatus}
+              onToggleThreadStatus={setShowThreadStatus}
+            />
+          )}
+        </section>
+      </div>
+
+      {conversationSettingsOpen ? (
+        <div className="startup-modal">
+          <div className="startup-modal__backdrop" onClick={() => setConversationSettingsOpen(false)} />
+          {conversationSettingsMode === 'create' ? (
             <ConfigPanel
+              mode="create"
+              title="New Conversation"
+              connectionState="disconnected"
+              sessionId={null}
+              error={null}
+              cwd={newConversationDraft.cwd}
+              recentPaths={recentPaths}
+              onCwdChange={(value) => setNewConversationDraft((current) => ({ ...current, cwd: value }))}
+              onConvertWindowsPath={() =>
+                setNewConversationDraft((current) => ({ ...current, cwd: convertWindowsPath(current.cwd) }))
+              }
+              onRecentPathSelect={(value) => setNewConversationDraft((current) => ({ ...current, cwd: value }))}
+              onRecentPathRemove={removeRecentPath}
+              accessMode={newConversationDraft.accessMode}
+              onAccessModeChange={(value) => setNewConversationDraft((current) => ({ ...current, accessMode: value }))}
+              multiAgentEnabled={newConversationDraft.multiAgentEnabled}
+              onMultiAgentChange={(checked) => setNewConversationDraft((current) => ({ ...current, multiAgentEnabled: checked }))}
+              onStart={() => {}}
+              onStop={() => {}}
+              onClose={() => setConversationSettingsOpen(false)}
+              onCreate={handleCreateConversationFromDraft}
+            />
+          ) : (
+            <ConfigPanel
+              mode="edit"
+              title={activeConversation?.title || 'Conversation'}
               connectionState={connectionState}
               sessionId={sessionId}
               error={error}
@@ -347,18 +472,13 @@ export default function App() {
               onAccessModeChange={setAccessMode}
               multiAgentEnabled={multiAgentEnabled}
               onMultiAgentChange={setMultiAgentEnabled}
-              autoOpenChanges={autoOpenChanges}
-              onAutoOpenChangesChange={setAutoOpenChanges}
-              resumeBehavior={resumeBehavior}
-              onResumeBehaviorChange={setResumeBehavior}
               onStart={startSession}
               onStop={stopSession}
-              showThreadStatus={showThreadStatus}
-              onToggleThreadStatus={setShowThreadStatus}
+              onClose={() => setConversationSettingsOpen(false)}
             />
           )}
-        </section>
-      </div>
+        </div>
+      ) : null}
 
       {startupDialogOpen ? (
         <div className="startup-modal">

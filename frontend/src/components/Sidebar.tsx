@@ -1,4 +1,4 @@
-import { FiChevronLeft, FiMessageSquare, FiPlus, FiSettings } from 'react-icons/fi';
+import { FiChevronLeft, FiMessageSquare, FiPlus, FiSettings, FiTrash2, FiTool } from 'react-icons/fi';
 import type { StoredConversation } from '../types';
 
 type SidebarProps = {
@@ -11,6 +11,8 @@ type SidebarProps = {
   activeConversationId: string | null;
   onSelectConversation: (id: string) => void;
   onCreateConversation: () => void;
+  onDeleteConversation: (id: string) => void;
+  onOpenConversationSettings: (id: string) => void;
 };
 
 export function Sidebar({
@@ -23,6 +25,8 @@ export function Sidebar({
   activeConversationId,
   onSelectConversation,
   onCreateConversation,
+  onDeleteConversation,
+  onOpenConversationSettings,
 }: SidebarProps) {
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
@@ -73,15 +77,31 @@ export function Sidebar({
 
         <div className="sidebar-conversations__list">
           {conversations.map((conversation) => (
-            <button
+            <div
               key={conversation.id}
-              type="button"
               className={`conversation-item ${activeConversationId === conversation.id ? 'conversation-item--active' : ''}`}
-              onClick={() => onSelectConversation(conversation.id)}
             >
-              <strong>{conversation.title}</strong>
-              <span>{conversation.cwd}</span>
-            </button>
+              <button type="button" className="conversation-item__main" onClick={() => onSelectConversation(conversation.id)}>
+                <strong>{conversation.title}</strong>
+                <span>{conversation.cwd}</span>
+              </button>
+              <button
+                type="button"
+                className="conversation-item__settings"
+                onClick={() => onOpenConversationSettings(conversation.id)}
+                aria-label={`Open settings for ${conversation.title}`}
+              >
+                <FiTool size={14} />
+              </button>
+              <button
+                type="button"
+                className="conversation-item__remove"
+                onClick={() => onDeleteConversation(conversation.id)}
+                aria-label={`Delete ${conversation.title}`}
+              >
+                <FiTrash2 size={14} />
+              </button>
+            </div>
           ))}
         </div>
       </div>

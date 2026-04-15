@@ -113,12 +113,12 @@ class CodexProcessManager {
         this.fanOut(record, 'onWarning', payload);
       },
       onExit: (payload) => {
-        this.cleanupRecord(record);
         this.fanOut(record, 'onExit', payload);
+        this.cleanupRecord(record);
       },
       onError: (error) => {
-        this.cleanupRecord(record);
         this.fanOut(record, 'onError', error);
+        this.cleanupRecord(record);
       },
     });
 
@@ -185,6 +185,16 @@ class CodexProcessManager {
   terminateSession(clientId, signal) {
     const record = this.getSessionRecord(clientId);
 
+    if (!record) {
+      return false;
+    }
+
+    this.cleanupRecord(record);
+    return record.session.terminate(signal);
+  }
+
+  terminateConversation(conversationId, signal = 'SIGTERM') {
+    const record = this.conversationSessions.get(conversationId);
     if (!record) {
       return false;
     }

@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "wait-on": "^9.0.5"
+  },
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "wait-on http://localhost:3001 && cd frontend && npm run dev",
+    "postinstall": "npm install --prefix backend && npm install --prefix frontend"
+  }
+}

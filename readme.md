@@ -199,69 +199,9 @@ Agent Runtime
 
 ## 📄 License
 
-Copyright (c) 2026 Cosmin
+This project is licensed under a custom license.
 
-All rights reserved.
-
----
-
-### Usage
-
-Permission is granted to use, copy, modify, and distribute this software for **personal, educational, and non-commercial purposes only**.
-
----
-
-### Attribution (REQUIRED)
-
-Any use of this software must include clear and visible attribution to the original author:
-
-**Cosmin (GitHub: https://github.com/cuesmen)**
-
-Attribution must be:
-
-- included in source code
-- visible in user interfaces (if applicable)
-- included in documentation or any public usage
-
----
-
-### Commercial Use
-
-Commercial use of this software is **NOT permitted** without explicit written permission from the author.
-
-If you intend to:
-
-- sell this software
-- include it in a paid product
-- use it in a monetized service
-
-you must obtain a commercial license by contacting the author.
-
----
-
-### Restrictions
-
-You may NOT:
-
-- remove or hide attribution
-- sublicense this software for commercial purposes
-- redistribute it as a paid product
-
----
-
-### Disclaimer
-
-This software is provided "as is", without warranty of any kind, express or implied.
-
-The author shall not be held liable for any damages arising from the use of this software.
-
----
-
-### Contact
-
-For commercial licensing inquiries:
-
-→ https://github.com/cuesmen
+See the LICENSE file for details.
 
 ---
 
